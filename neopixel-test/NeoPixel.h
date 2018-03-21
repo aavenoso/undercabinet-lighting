@@ -69,9 +69,14 @@
 
 #define NEO_PIXEL_KHZ800 0x0000 // 800 KHz datastream
 
+#define NEO_PIXEL_PWM_BUFFER_NUMBER_OF_HALVES 2
+#define NEO_PIXEL_PWM_BUFFER_BITS_PER_BYTE    8
+#define NEO_PIXEL_PWM_BUFFER_PIXELS_PER_HALF  40
+#define NEO_PIXEL_PWM_BUFFER_LEN (NEO_PIXEL_PWM_BUFFER_NUMBER_OF_HALVES * NEO_PIXEL_PWM_BUFFER_BITS_PER_BYTE * NEO_PIXEL_PWM_BUFFER_PIXELS_PER_HALF)
+
 class NeoPixel {
 public:
-  NeoPixel(uint16_t numberOfLeds, uint8_t dataPin, uint8_t type, uint8_t *pixels, uint16_t pixelsLength);
+  NeoPixel(uint16_t pin, uint16_t numberOfLeds, uint8_t type, uint8_t *pixels, uint16_t pixelsLength);
 
   virtual ~NeoPixel();
 
@@ -80,8 +85,6 @@ public:
   void begin();
 
   void show();
-
-  void setPin(uint8_t dataPin);
 
   void setPixelColor(uint16_t n, uint8_t r, uint8_t g, uint8_t b);
 
@@ -95,18 +98,32 @@ public:
 
   static uint32_t Color(uint8_t r, uint8_t g, uint8_t b, uint8_t w);
 
+  void fillHalfOfPWMBuffer();
+
 private:
+  void configureDMA();
+
+  void configureTIM();
+
   void updateLength(uint16_t n);
 
   void updateType(uint8_t t);
 
+  void stopDMA();
+
   bool m_begun;         // true if begin() previously called
+  uint16_t m_pin;
   uint16_t m_numLEDs;   // Number of RGB LEDs in strip
   uint16_t m_numBytes;  // Size of 'pixels' buffer below (3 or 4 bytes/pixel)
-  int8_t m_pin;         // Output pin number (-1 if not yet set)
   uint8_t m_brightness;
   uint8_t *m_pixels;    // Holds LED color values (3 or 4 bytes each)
-  uint16_t m_pixelsLength;
+  uint8_t *m_pixelsEnd;
+  uint8_t *m_currentPixel;
+  uint32_t* m_currentPwmBuffer;
+  uint32_t m_pwmBuffer[NEO_PIXEL_PWM_BUFFER_LEN];
+  uint32_t* m_pwmBufferEnd;
+  uint32_t m_duty0;
+  uint32_t m_duty1;
   uint8_t m_rOffset;    // Index of red byte within each 3- or 4-byte pixel
   uint8_t m_gOffset;    // Index of green byte
   uint8_t m_bOffset;    // Index of blue byte

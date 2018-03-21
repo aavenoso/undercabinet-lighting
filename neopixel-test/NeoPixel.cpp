@@ -2,30 +2,137 @@
 #include <Arduino.h>
 #include <cassert>
 
-NeoPixel::NeoPixel(uint16_t numberOfLeds, uint8_t dataPin, uint8_t type, uint8_t *pixels, uint16_t pixelsLength)
-    : m_begun(false), m_brightness(0), m_pixels(pixels), m_pixelsLength(pixelsLength), m_endTime(0) {
+static NeoPixel *neoPixel;
+
+NeoPixel::NeoPixel(uint16_t pin, uint16_t numberOfLeds, uint8_t type, uint8_t *pixels, uint16_t pixelsLength)
+    : m_begun(false), m_pin(pin), m_brightness(0), m_pixels(pixels), m_pixelsEnd(pixels + pixelsLength), m_endTime(0) {
   updateType(type);
   updateLength(numberOfLeds);
-  setPin(dataPin);
 }
 
 NeoPixel::~NeoPixel() {
-  if (m_pin >= 0) {
-    pinMode(m_pin, INPUT);
-  }
 }
 
 void NeoPixel::begin() {
-  if (m_pin >= 0) {
-    pinMode(m_pin, OUTPUT);
-    digitalWrite(m_pin, LOW);
-  }
+  configureDMA();
+  configureTIM();
   m_begun = true;
+}
+
+void NeoPixel::configureDMA() {
+  NVIC_SetPriority(DMA1_Channel7_IRQn, 0);
+  NVIC_EnableIRQ(DMA1_Channel7_IRQn);
+
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
+
+  LL_DMA_ConfigTransfer(
+      DMA1,
+      LL_DMA_CHANNEL_7,
+      LL_DMA_DIRECTION_MEMORY_TO_PERIPH
+      | LL_DMA_PRIORITY_HIGH
+      | LL_DMA_MODE_CIRCULAR
+      | LL_DMA_PERIPH_NOINCREMENT
+      | LL_DMA_MEMORY_INCREMENT
+      | LL_DMA_PDATAALIGN_WORD
+      | LL_DMA_MDATAALIGN_WORD
+  );
+
+  LL_DMA_EnableIT_HT(DMA1, LL_DMA_CHANNEL_7);
+  LL_DMA_EnableIT_TC(DMA1, LL_DMA_CHANNEL_7);
+}
+
+void NeoPixel::configureTIM() {
+  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_GPIOA);
+  LL_GPIO_SetPinMode(GPIOA, LL_GPIO_PIN_1, LL_GPIO_MODE_ALTERNATE);
+  LL_GPIO_SetPinPull(GPIOA, LL_GPIO_PIN_1, LL_GPIO_PULL_DOWN);
+  LL_GPIO_SetPinSpeed(GPIOA, LL_GPIO_PIN_1, LL_GPIO_SPEED_FREQ_HIGH);
+  NVIC_SetPriority(TIM2_IRQn, 0);
+  NVIC_EnableIRQ(TIM2_IRQn);
+
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM2);
+
+  LL_TIM_SetPrescaler(TIM2, 0);
+
+  LL_TIM_SetRepetitionCounter(TIM2, 4 - 1);
+
+  LL_TIM_OC_SetMode(TIM2, LL_TIM_CHANNEL_CH2, LL_TIM_OCMODE_PWM1);
+
+  LL_TIM_OC_ConfigOutput(TIM2, LL_TIM_CHANNEL_CH2, LL_TIM_OCPOLARITY_HIGH | LL_TIM_OCIDLESTATE_HIGH);
+
+  LL_TIM_OC_SetCompareCH2(TIM2, 0);
+
+  LL_TIM_OC_EnablePreload(TIM2, LL_TIM_CHANNEL_CH2);
+
+  LL_TIM_EnableDMAReq_UPDATE(TIM2);
+
+  LL_TIM_EnableDMAReq_CC2(TIM2);
+}
+
+void NeoPixel::show() {
+  stopDMA();
+
+  /*
+   *  1 / 72,000,000 = 0.00000001388888
+   *             1ns = 0.000000001
+   *           800ns = 0.000000800 (57 cycles)
+   *          1250ns = 0.000001250 (90 cycles)
+   */
+  uint32_t autoReload = (1250 * (SystemCoreClock / 100000)) / 10000;
+  LL_TIM_SetAutoReload(TIM2, autoReload);
+  m_duty0 = autoReload * 400 / 1250;
+  m_duty1 = autoReload * 800 / 1250;
+
+  neoPixel = this;
+  m_currentPixel = m_pixels;
+  m_currentPwmBuffer = m_pwmBuffer;
+  m_pwmBufferEnd = m_pwmBuffer + NEO_PIXEL_PWM_BUFFER_LEN;
+  memset(m_pwmBuffer, 0, NEO_PIXEL_PWM_BUFFER_LEN * sizeof(uint32_t));
+  fillHalfOfPWMBuffer();
+
+//  Serial.println("debug ------------------------------------");
+//  Serial.print("    m_currentPixel: ");
+//  Serial.println((uint32_t) m_currentPixel);
+//  Serial.print("          m_pixels: ");
+//  Serial.println((uint32_t) m_pixels);
+//  Serial.print("       m_pixelsEnd: ");
+//  Serial.println((uint32_t) m_pixelsEnd);
+//  Serial.println("");
+//  Serial.print("m_currentPwmBuffer: ");
+//  Serial.println((uint32_t) m_currentPwmBuffer);
+//  Serial.print("       m_pwmBuffer: ");
+//  Serial.println((uint32_t) m_pwmBuffer);
+//  Serial.print("    m_pwmBufferEnd: ");
+//  Serial.println((uint32_t) m_pwmBufferEnd);
+
+//  fillHalfOfPWMBuffer();
+//  fillHalfOfPWMBuffer();
+
+  LL_DMA_ConfigAddresses(
+      DMA1,
+      LL_DMA_CHANNEL_7,
+      (uint32_t) m_pwmBuffer,
+      (uint32_t) & TIM2->CCR2,
+      LL_DMA_GetDataTransferDirection(DMA1, LL_DMA_CHANNEL_7)
+  );
+  LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_7, NEO_PIXEL_PWM_BUFFER_LEN);
+
+  LL_TIM_CC_EnableChannel(TIM2, LL_TIM_CHANNEL_CH2);
+  LL_TIM_EnableAllOutputs(TIM2);
+  LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_7);
+  LL_TIM_EnableCounter(TIM2);
+  LL_TIM_GenerateEvent_UPDATE(TIM2);
+}
+
+void NeoPixel::stopDMA() {
+  LL_TIM_DisableAllOutputs(TIM2);
+  LL_TIM_CC_DisableChannel(TIM2, LL_TIM_CHANNEL_CH2);
+  LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_7);
+  LL_TIM_DisableCounter(TIM2);
 }
 
 void NeoPixel::updateLength(uint16_t n) {
   m_numBytes = n * ((m_wOffset == m_rOffset) ? 3 : 4);
-  assert(m_pixelsLength >= m_numBytes);
+  assert((m_pixelsEnd - m_pixels) >= m_numBytes);
   memset(m_pixels, 0, m_numBytes);
   m_numLEDs = n;
 }
@@ -46,73 +153,6 @@ void NeoPixel::updateType(uint8_t t) {
   }
 }
 
-void NeoPixel::show() {
-  uint8_t *ptr = m_pixels;
-  uint8_t *end = ptr + m_numBytes;
-  uint8_t p = *ptr++;
-  uint8_t bitMask = 0x80;
-
-  GPIO_TypeDef *port = digitalPinToPort(m_pin);
-  uint32_t setPin = digitalPinToBitMask(m_pin);
-  uint32_t resetPin = setPin << 16U;
-
-  noInterrupts();
-  for (;;) {
-    if (p & bitMask) { // ONE
-      // High 800ns
-      port->BSRR = setPin;
-      asm("nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop;");
-      // Low 450ns
-      port->BSRR = resetPin;
-      asm("nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop;");
-    } else { // ZERO
-      // High 400ns
-      port->BSRR = setPin;
-      asm("nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop;");
-      // Low 850ns
-      port->BSRR = resetPin;
-      asm("nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop; nop; nop; nop;"
-          "nop; nop; nop; nop; nop;");
-    }
-    if (bitMask >>= 1) {
-      // Move on to the next pixel
-      asm("nop;");
-    } else {
-      if (ptr >= end) {
-        break;
-      }
-      p = *ptr++;
-      bitMask = 0x80;
-    }
-  }
-  interrupts();
-}
-
-void NeoPixel::setPin(uint8_t dataPin) {
-  if (m_begun && (m_pin >= 0)) {
-    pinMode(m_pin, INPUT);
-  }
-  m_pin = dataPin;
-  if (m_begun) {
-    pinMode(m_pin, OUTPUT);
-    digitalWrite(m_pin, LOW);
-  }
-}
-
 void NeoPixel::setPixelColor(uint16_t n, uint8_t r, uint8_t g, uint8_t b) {
   if (n < m_numLEDs) {
     if (m_brightness) { // See notes in setBrightness()
@@ -122,12 +162,12 @@ void NeoPixel::setPixelColor(uint16_t n, uint8_t r, uint8_t g, uint8_t b) {
     }
     uint8_t *p;
     if (m_wOffset == m_rOffset) { // Is an RGB-type strip
-      p = &m_pixels[n * 3];    // 3 bytes per pixel
-    } else {                 // Is a WRGB-type strip
-      p = &m_pixels[n * 4];    // 4 bytes per pixel
-      p[m_wOffset] = 0;        // But only R,G,B passed -- set W to 0
+      p = &m_pixels[n * 3];       // 3 bytes per pixel
+    } else {                      // Is a WRGB-type strip
+      p = &m_pixels[n * 4];       // 4 bytes per pixel
+      p[m_wOffset] = 0;           // But only R,G,B passed -- set W to 0
     }
-    p[m_rOffset] = r;          // R,G,B always stored
+    p[m_rOffset] = r;             // R,G,B always stored
     p[m_gOffset] = g;
     p[m_bOffset] = b;
   }
@@ -233,4 +273,44 @@ void NeoPixel::setBrightness(uint8_t brightness) {
     }
     brightness = newBrightness;
   }
+}
+
+void NeoPixel::fillHalfOfPWMBuffer() {
+  uint8_t bitMask = 0x80;
+  uint8_t p = m_currentPixel < m_pixelsEnd ? *m_currentPixel : 0;
+
+  for (int i = 0; i < NEO_PIXEL_PWM_BUFFER_LEN / 2; i++) {
+    if (m_currentPixel >= m_pixelsEnd) {
+      *m_currentPwmBuffer = 0;
+    } else if (p & bitMask) {
+      *m_currentPwmBuffer = m_duty1;
+    } else {
+      *m_currentPwmBuffer = m_duty0;
+    }
+    bitMask = bitMask >> 1;
+    if (bitMask == 0x00) {
+      if (m_currentPixel < m_pixelsEnd) {
+        p = *m_currentPixel;
+        m_currentPixel++;
+      }
+      bitMask = 0x80;
+    }
+    m_currentPwmBuffer++;
+    if (m_currentPwmBuffer >= m_pwmBufferEnd) {
+      m_currentPwmBuffer = m_pwmBuffer;
+    }
+  }
+}
+
+extern "C" {
+void DMA1_Channel7_IRQHandler() {
+  if (LL_DMA_IsActiveFlag_TC7(DMA1) == 1) {
+    LL_DMA_ClearFlag_TC7(DMA1);
+    neoPixel->fillHalfOfPWMBuffer();
+  }
+  if (LL_DMA_IsActiveFlag_HT7(DMA1) == 1) {
+    LL_DMA_ClearFlag_HT7(DMA1);
+    neoPixel->fillHalfOfPWMBuffer();
+  }
+}
 }

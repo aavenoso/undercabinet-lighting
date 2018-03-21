@@ -9,8 +9,8 @@
 
 uint8_t ledStripPixels[LED_STRIP_NUM_LEDS * 4];
 NeoPixel ledStrip(
-    LED_STRIP_NUM_LEDS,
     LED_STRIP_PIN,
+    LED_STRIP_NUM_LEDS,
     NEO_PIXEL_GRBW | NEO_PIXEL_KHZ800,
     ledStripPixels,
     sizeof(ledStripPixels)
@@ -18,6 +18,8 @@ NeoPixel ledStrip(
 
 void setup() {
   Serial.begin(9600);
+  Serial.println("begin setup");
+  delay(100);
   setupLedStrip();
   pinMode(USER_LED, OUTPUT);
   Serial.println("setup complete");
@@ -30,11 +32,16 @@ void setupLedStrip() {
 }
 
 void loop() {
-  Serial.println("loop");
+  Serial.println("red");
   colorWipe(ledStrip.Color(255, 0, 0), 50); // Red
+  Serial.println("green");
   colorWipe(ledStrip.Color(0, 255, 0), 50); // Green
+  Serial.println("blue");
   colorWipe(ledStrip.Color(0, 0, 255), 50); // Blue
+  Serial.println("white");
   colorWipe(ledStrip.Color(0, 0, 0, 255), 50); // White
+  Serial.println("black");
+  colorWipe(ledStrip.Color(0, 0, 0, 0), 50); // White
 
   digitalWrite(USER_LED, LOW);
   delay(500);

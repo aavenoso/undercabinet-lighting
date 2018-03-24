@@ -32,6 +32,7 @@ void setupLedStrip() {
 }
 
 void loop() {
+  Serial.println("loop");
   Serial.println("red");
   colorWipe(ledStrip.Color(255, 0, 0), 50); // Red
   Serial.println("green");

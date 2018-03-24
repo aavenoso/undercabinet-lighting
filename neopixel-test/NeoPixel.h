@@ -71,7 +71,7 @@
 
 #define NEO_PIXEL_PWM_BUFFER_NUMBER_OF_HALVES 2
 #define NEO_PIXEL_PWM_BUFFER_BITS_PER_BYTE    8
-#define NEO_PIXEL_PWM_BUFFER_PIXELS_PER_HALF  40
+#define NEO_PIXEL_PWM_BUFFER_PIXELS_PER_HALF  10
 #define NEO_PIXEL_PWM_BUFFER_LEN (NEO_PIXEL_PWM_BUFFER_NUMBER_OF_HALVES * NEO_PIXEL_PWM_BUFFER_BITS_PER_BYTE * NEO_PIXEL_PWM_BUFFER_PIXELS_PER_HALF)
 
 class NeoPixel {
@@ -117,13 +117,13 @@ private:
   uint16_t m_numBytes;  // Size of 'pixels' buffer below (3 or 4 bytes/pixel)
   uint8_t m_brightness;
   uint8_t *m_pixels;    // Holds LED color values (3 or 4 bytes each)
-  uint8_t *m_pixelsEnd;
-  uint8_t *m_currentPixel;
-  uint32_t* m_currentPwmBuffer;
-  uint32_t m_pwmBuffer[NEO_PIXEL_PWM_BUFFER_LEN];
-  uint32_t* m_pwmBufferEnd;
-  uint32_t m_duty0;
-  uint32_t m_duty1;
+  uint8_t *m_pixelsEnd; // pointer to the end of the m_pixels array
+  uint8_t *m_currentPixel;      // current pixel being read into to DMA
+  uint32_t m_pwmBuffer[NEO_PIXEL_PWM_BUFFER_LEN]; // DMA PWM buffer
+  uint32_t* m_pwmBufferEnd;     // end of m_pwmBuffer
+  uint32_t* m_currentPwmBuffer; // current write location for next value
+  uint32_t m_duty0;     // length of a 0 bit in PWM
+  uint32_t m_duty1;     // length of a 1 bit in PWM
   uint8_t m_rOffset;    // Index of red byte within each 3- or 4-byte pixel
   uint8_t m_gOffset;    // Index of green byte
   uint8_t m_bOffset;    // Index of blue byte

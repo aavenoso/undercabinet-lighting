@@ -71,41 +71,16 @@ void NeoPixel::configureTIM() {
 void NeoPixel::show() {
   stopDMA();
 
-  /*
-   *  1 / 72,000,000 = 0.00000001388888
-   *             1ns = 0.000000001
-   *           800ns = 0.000000800 (57 cycles)
-   *          1250ns = 0.000001250 (90 cycles)
-   */
-  uint32_t autoReload = (1250 * (SystemCoreClock / 100000)) / 10000;
+  uint32_t autoReload = (1200 * (SystemCoreClock / 100000)) / 10000;
   LL_TIM_SetAutoReload(TIM2, autoReload);
-  m_duty0 = autoReload * 400 / 1250;
-  m_duty1 = autoReload * 800 / 1250;
+  m_duty0 = autoReload * 300 / 1200;
+  m_duty1 = autoReload * 600 / 1200;
 
   neoPixel = this;
   m_currentPixel = m_pixels;
   m_currentPwmBuffer = m_pwmBuffer;
   m_pwmBufferEnd = m_pwmBuffer + NEO_PIXEL_PWM_BUFFER_LEN;
   memset(m_pwmBuffer, 0, NEO_PIXEL_PWM_BUFFER_LEN * sizeof(uint32_t));
-  fillHalfOfPWMBuffer();
-
-//  Serial.println("debug ------------------------------------");
-//  Serial.print("    m_currentPixel: ");
-//  Serial.println((uint32_t) m_currentPixel);
-//  Serial.print("          m_pixels: ");
-//  Serial.println((uint32_t) m_pixels);
-//  Serial.print("       m_pixelsEnd: ");
-//  Serial.println((uint32_t) m_pixelsEnd);
-//  Serial.println("");
-//  Serial.print("m_currentPwmBuffer: ");
-//  Serial.println((uint32_t) m_currentPwmBuffer);
-//  Serial.print("       m_pwmBuffer: ");
-//  Serial.println((uint32_t) m_pwmBuffer);
-//  Serial.print("    m_pwmBufferEnd: ");
-//  Serial.println((uint32_t) m_pwmBufferEnd);
-
-//  fillHalfOfPWMBuffer();
-//  fillHalfOfPWMBuffer();
 
   LL_DMA_ConfigAddresses(
       DMA1,
@@ -289,9 +264,11 @@ void NeoPixel::fillHalfOfPWMBuffer() {
     }
     bitMask = bitMask >> 1;
     if (bitMask == 0x00) {
-      if (m_currentPixel < m_pixelsEnd) {
-        p = *m_currentPixel;
+      if (m_currentPixel < m_pixelsEnd - 1) {
         m_currentPixel++;
+        p = *m_currentPixel;
+      } else {
+        p = 0;
       }
       bitMask = 0x80;
     }

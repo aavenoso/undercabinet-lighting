@@ -68,6 +68,12 @@ void NeoPixel::configureTIM() {
   LL_TIM_EnableDMAReq_CC2(TIM2);
 }
 
+/**
+ * Calls to show should not exceed the rate at which an update requires.
+ *
+ * Number of LEDs * 32bits * 1200ns
+ * For 240 LEDs that's 9.216ms
+ */
 void NeoPixel::show() {
   stopDMA();
 

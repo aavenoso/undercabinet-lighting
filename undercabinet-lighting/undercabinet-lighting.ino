@@ -1,20 +1,16 @@
-// Adafruit NeoPixel - Version: 1.1.6
-#include <Adafruit_NeoPixel.h>
+#include "NeoPixel.h"
 
-#ifdef __AVR__
-  #include <avr/power.h>
-#endif
-
-#define NUM_LEDS 240
+#define LED_STRIP_NUM_LEDS 240
 
 #define MAX_BRIGHTNESS 255
 #define BUTTON_OFF_MAX_BRIGHTNESS 200
 #define MAX_HUE 255
+#define MIN_LED_DELAY 10
 
 #define MOTION_DELAY 10000
 
 #define MOTION_INTERRUPT_PIN 2
-#define NEOPIXEL_PIN 6
+#define LED_STRIP_PIN D47 /* PA1 */
 #define BUTTON_LED_RED_PIN 9
 #define BUTTON_LED_GREEN_PIN 10
 #define BUTTON_LED_BLUE_PIN 11
@@ -24,7 +20,14 @@
 // change the motion sensor to poll instead of interrupt
 // use the two interrupt pins for the buttons
 
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, NEOPIXEL_PIN, NEO_GRBW + NEO_KHZ800);
+uint8_t ledStripPixels[LED_STRIP_NUM_LEDS * 4];
+NeoPixel strip(
+    LED_STRIP_PIN,
+    LED_STRIP_NUM_LEDS,
+    NEO_PIXEL_GRBW | NEO_PIXEL_KHZ800,
+    ledStripPixels,
+    sizeof(ledStripPixels)
+);
 
 byte neopix_gamma[] = {
     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
@@ -66,8 +69,8 @@ byte neopix_gamma[] = {
 
 volatile unsigned long motionDetectedAt;
 volatile unsigned int state;
-volatile unsigned int brightness;
-volatile float delayMultiplier;
+volatile unsigned int brightness = 255;
+volatile float delayMultiplier = 1.0;
 volatile unsigned int hueOffset;
 volatile unsigned int btn2State; 
 volatile unsigned int discoProgram;
@@ -79,6 +82,8 @@ void setup() {
   setupMainButton();
   setupSecondaryButton();
   setupMotionSensors();
+  state = STATE_DISCO;
+  discoProgram = PROGRAM_CYLON; 
 }
 
 void setupMotionSensors() {
@@ -131,13 +136,15 @@ void stateOff() {
     }
   }
   analogWrite(BUTTON_LED_RED_PIN, neopix_gamma[buttonOffBrightness]);
-  delay(5);
+  delay(MIN_LED_DELAY);
   counter++;
 }
 
 // fade up to white and then set state to ON
 void stateTurningOn() {
-  fadeUp(STATE_ON);
+  fadeUp(STATE_TURNING_OFF);
+  // only do it this way until the button is hooked up
+  //fadeUp(STATE_ON);
 }
 
 void stateOn() {
@@ -146,7 +153,9 @@ void stateOn() {
 
 // fade down to black and then set state to OFF
 void stateTurningOff() {
-  fadeDown(STATE_OFF);
+//  fadeDown(STATE_OFF);
+// only do it this way until the button is hooked up
+  fadeDown(STATE_TURNING_ON);
 }
 
 void stateMotionOff() {
@@ -165,14 +174,14 @@ void stateMotionOn() {
   if (millis() - motionDetectedAt > MOTION_DELAY) {
     state = STATE_MOTION_TURNING_OFF;
   }
-  delay(5);
+  delay(MIN_LED_DELAY);
 }
 
 void stateColor() {
   for(uint16_t i=0; i<strip.numPixels(); i++) {
     strip.setPixelColor(i, adjustBrightnessOfColor(colorWheel(hueOffset)) );
   }
-  delay(5);
+  delay(MIN_LED_DELAY);
 }
 
 void stateDisco() {
@@ -183,18 +192,25 @@ void stateDisco() {
 }
 
 void programCylon() {
-  unsigned int cylonLength = 5;
+  unsigned int cylonLength = 10;
   unsigned int startingLed = counter;
   unsigned int maxStartingLed = strip.numPixels() - cylonLength;
   if (startingLed > maxStartingLed) {
-    startingLed = counter - maxStartingLed;
+    startingLed = (maxStartingLed * 2) - counter;
   }
-  
-  for(uint16_t i=0; i<cylonLength; i++) {
-    strip.setPixelColor(startingLed + i, strip.Color(0,0,0, neopix_gamma[counter] ) );
+  uint32_t black = strip.Color(0, 0, 0);
+//  uint32_t color = adjustBrightnessOfColor(colorWheel(hueOffset));
+  uint32_t color = adjustBrightnessOfColor(colorWheel(startingLed));
+  for(uint16_t i=0; i<strip.numPixels(); i++) {
+    if (i >= startingLed && i < startingLed + cylonLength) {
+      strip.setPixelColor(i, color);
+    } else {
+      strip.setPixelColor(i, black);
+    }
+    
   }
   strip.show();
-  delay(5);
+  delay(MIN_LED_DELAY * delayMultiplier);
   if (counter < (maxStartingLed * 2)) {
     counter++;
   } else {
@@ -268,7 +284,7 @@ void fadeUp(unsigned int finalState) {
     strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[counter] ) );
   }
   strip.show();
-  delay(5);
+  delay(MIN_LED_DELAY);
   if (counter < 255) {
     counter++;
   } else {
@@ -282,7 +298,7 @@ void fadeDown(unsigned int finalState) {
     strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[255-counter] ) );
   }
   strip.show();
-  delay(5);
+  delay(MIN_LED_DELAY);
   if (counter < 255) {
     counter++;
   } else {

@@ -1,14 +1,20 @@
 #include "NeoPixel.h"
 
+/* defines you can change */
 #define LED_STRIP_NUM_LEDS 240
-
+#define MIN_BRIGHTNESS 50
 #define MAX_BRIGHTNESS 255
 #define BUTTON_OFF_MAX_BRIGHTNESS 200
+#define MOTION_DELAY 10000
+#define BUTTON_OFF_DURATION 1000
+#define BUTTON_COLOR_DURATION 3000 /* must be greater than BUTTON_OFF_DURATION */ 
+#define BUTTON_DISCO_DURATION 5000 /* must be greater than BUTTON_COLOR_DURATION */
+
+
+/* defines you should not change */
 #define MAX_HUE 255
 #define MIN_LED_DELAY 10
-
-#define MOTION_DELAY 10000
-
+/* pins */
 #define MOTION_INTERRUPT_PIN 2
 #define LED_STRIP_PIN D47 /* PA1 */
 #define BUTTON_LED_RED_PIN 9
@@ -16,9 +22,28 @@
 #define BUTTON_LED_BLUE_PIN 11
 #define MAIN_BUTTON_INTERRUPT_PIN 3
 #define SECONDARY_BUTTON_INTERRUPT_PIN 4
+#define ENCODER_INTERRUPT_PIN_A 5
+#define ENCODER_INTERRUPT_PIN_B 6
+/* states */
+#define STATE_OFF 0
+#define STATE_TURNING_ON 1
+#define STATE_ON 2
+#define STATE_TURNING_OFF 3
+#define STATE_MOTION_OFF 4
+#define STATE_MOTION_TURNING_ON 5
+#define STATE_MOTION_TURNING_OFF 6
+#define STATE_MOTION_ON 7
+#define STATE_COLOR 8
+#define STATE_DISCO 9
 
-// change the motion sensor to poll instead of interrupt
-// use the two interrupt pins for the buttons
+#define BTN2_STATE_BRIGHTNESS 0
+#define BTN2_STATE_COLOR 1
+#define BTN2_STATE_SPEED 2
+#define BTN2_STATE_PROGRAM 3
+
+#define PROGRAM_CYLON 0
+#define PROGRAM_FIREWORKS 1
+#define PROGRAM_COUNT 2
 
 uint8_t ledStripPixels[LED_STRIP_NUM_LEDS * 4];
 NeoPixel strip(
@@ -47,34 +72,17 @@ byte neopix_gamma[] = {
   177,180,182,184,186,189,191,193,196,198,200,203,205,208,210,213,
   215,218,220,223,225,228,231,233,236,239,241,244,247,249,252,255 };
 
-#define STATE_OFF 0
-#define STATE_TURNING_ON 1
-#define STATE_ON 2
-#define STATE_TURNING_OFF 3
-#define STATE_MOTION_OFF 4
-#define STATE_MOTION_TURNING_ON 5
-#define STATE_MOTION_TURNING_OFF 6
-#define STATE_MOTION_ON 7
-#define STATE_COLOR 8
-#define STATE_DISCO 9
 
-#define BTN2_STATE_BRIGHTNESS 0
-#define BTN2_STATE_COLOR 1
-#define BTN2_STATE_SPEED 2
-#define BTN2_STATE_PROGRAM 3
 
-#define PROGRAM_CYLON 0
-#define PROGRAM_FIREWORKS 1
-#define PROGRAM_COUNT 2
-
-volatile unsigned long motionDetectedAt;
-volatile unsigned int state;
-volatile unsigned int brightness = 255;
-volatile float delayMultiplier = 1.0;
-volatile unsigned int hueOffset;
-volatile unsigned int btn2State; 
-volatile unsigned int discoProgram;
-volatile unsigned int counter;
+volatile unsigned long gMotionDetectedAt;
+volatile unsigned long gMainButtonPressedAt;
+volatile byte gState;
+volatile byte gBrightness = 255;
+volatile float gDelayMultiplier = 1.0;
+volatile byte gHueOffset;
+volatile byte gBtn2State; 
+volatile byte gDiscoProgram;
+volatile unsigned int gCounter;
 
 void setup() {
   Serial.begin(9600);
@@ -82,8 +90,8 @@ void setup() {
   setupMainButton();
   setupSecondaryButton();
   setupMotionSensors();
-  state = STATE_DISCO;
-  discoProgram = PROGRAM_CYLON; 
+  gState = STATE_DISCO;
+  gDiscoProgram = PROGRAM_CYLON; 
 }
 
 void setupMotionSensors() {
@@ -112,7 +120,7 @@ void setupSecondaryButton() {
 }
 
 void loop() {
-  switch(state) {
+  switch(gState) {
     case STATE_OFF: stateOff(); break;
     case STATE_TURNING_ON: stateTurningOn(); break;
     case STATE_ON: stateOn(); break;
@@ -124,20 +132,21 @@ void loop() {
     case STATE_COLOR: stateColor(); break;
     case STATE_DISCO: stateDisco(); break;
   }
+  handleButtonPresses();
 }
 
 // do nothing to the neopixels, make the button breath in red
 void stateOff() {
-  unsigned int buttonOffBrightness = counter;
-  if (counter > BUTTON_OFF_MAX_BRIGHTNESS) {
-    buttonOffBrightness = (BUTTON_OFF_MAX_BRIGHTNESS * 2) - counter;
-    if (counter > (BUTTON_OFF_MAX_BRIGHTNESS * 2)) {
-      counter = -1;
+  unsigned int buttonOffBrightness = gCounter;
+  if (gCounter > BUTTON_OFF_MAX_BRIGHTNESS) {
+    buttonOffBrightness = (BUTTON_OFF_MAX_BRIGHTNESS * 2) - gCounter;
+    if (gCounter > (BUTTON_OFF_MAX_BRIGHTNESS * 2)) {
+      gCounter = -1;
     }
   }
   analogWrite(BUTTON_LED_RED_PIN, neopix_gamma[buttonOffBrightness]);
   delay(MIN_LED_DELAY);
-  counter++;
+  gCounter++;
 }
 
 // fade up to white and then set state to ON
@@ -171,21 +180,21 @@ void stateMotionTurningOff() {
 }
 
 void stateMotionOn() {
-  if (millis() - motionDetectedAt > MOTION_DELAY) {
-    state = STATE_MOTION_TURNING_OFF;
+  if (millis() - gMotionDetectedAt > MOTION_DELAY) {
+    gState = STATE_MOTION_TURNING_OFF;
   }
   delay(MIN_LED_DELAY);
 }
 
 void stateColor() {
   for(uint16_t i=0; i<strip.numPixels(); i++) {
-    strip.setPixelColor(i, adjustBrightnessOfColor(colorWheel(hueOffset)) );
+    strip.setPixelColor(i, colorWheel(gHueOffset, false) );
   }
   delay(MIN_LED_DELAY);
 }
 
 void stateDisco() {
-  switch(discoProgram) {
+  switch(gDiscoProgram) {
     case PROGRAM_CYLON: programCylon(); break;
     case PROGRAM_FIREWORKS: programFireworks(); break;
   }
@@ -193,14 +202,14 @@ void stateDisco() {
 
 void programCylon() {
   unsigned int cylonLength = 10;
-  unsigned int startingLed = counter;
+  unsigned int startingLed = gCounter;
   unsigned int maxStartingLed = strip.numPixels() - cylonLength;
   if (startingLed > maxStartingLed) {
-    startingLed = (maxStartingLed * 2) - counter;
+    startingLed = (maxStartingLed * 2) - gCounter;
   }
-  uint32_t black = strip.Color(0, 0, 0);
-//  uint32_t color = adjustBrightnessOfColor(colorWheel(hueOffset));
-  uint32_t color = adjustBrightnessOfColor(colorWheel(startingLed));
+  uint32_t black = strip.Color(0, 0, 0, 0);
+//  uint32_t color = colorWheel(gHueOffset, true);
+  uint32_t color = colorWheel(startingLed, false);
   for(uint16_t i=0; i<strip.numPixels(); i++) {
     if (i >= startingLed && i < startingLed + cylonLength) {
       strip.setPixelColor(i, color);
@@ -210,11 +219,11 @@ void programCylon() {
     
   }
   strip.show();
-  delay(MIN_LED_DELAY * delayMultiplier);
-  if (counter < (maxStartingLed * 2)) {
-    counter++;
+  delay(MIN_LED_DELAY * gDelayMultiplier);
+  if (gCounter < (maxStartingLed * 2)) {
+    gCounter++;
   } else {
-    counter = 0;
+    gCounter = 0;
   }
 }
 
@@ -223,109 +232,148 @@ void programFireworks() {
 }
 
 void mainButtonChanged() {
-  counter = 0;
-  btn2State = BTN2_STATE_BRIGHTNESS;
-  // change state
-  // how do I tell if it was pressed or released
-}
-
-void secondaryButtonPressed() {
-  if (state == STATE_COLOR && btn2State == BTN2_STATE_BRIGHTNESS) {
-    btn2State = BTN2_STATE_COLOR;
-  } else if (state == STATE_DISCO && btn2State == BTN2_STATE_BRIGHTNESS) {
-    btn2State = BTN2_STATE_COLOR;
-  } else if (state == STATE_DISCO && btn2State == BTN2_STATE_COLOR) {
-    btn2State = BTN2_STATE_SPEED;
-  } else if (state == STATE_DISCO && btn2State == BTN2_STATE_SPEED) {
-    btn2State = BTN2_STATE_PROGRAM;
+  byte buttonVal = digitalRead(MAIN_BUTTON_INTERRUPT_PIN);
+  if (buttonVal == HIGH) {
+    gMainButtonPressedAt = millis();
   } else {
-    btn2State = BTN2_STATE_BRIGHTNESS;
+    gMainButtonPressedAt = 0;
   }
 }
 
-void dialTurnedUp() {
-  switch(btn2State) {
-    case BTN2_STATE_BRIGHTNESS:
-      brightness++;
-      if (brightness > MAX_BRIGHTNESS) {
-        brightness = MAX_BRIGHTNESS;
+void handleButtonPresses() {
+  if (gMainButtonPressedAt > 0) {
+    unsigned long duration = millis() - gMainButtonPressedAt;
+    if ( duration > BUTTON_DISCO_DURATION) {
+      changeState(STATE_DISCO);
+    } else if (duration > BUTTON_COLOR_DURATION) {
+      changeState(STATE_COLOR);
+    } else if (duration > BUTTON_OFF_DURATION) {
+      changeState(STATE_TURNING_OFF);
+    } else if (duration > 10) { // debounce
+      if (gState == STATE_ON || gState == STATE_TURNING_ON) {
+        changeState(STATE_MOTION_OFF);
+      } else {
+        changeState(STATE_TURNING_ON);
       }
+    }
+  }
+}
+
+void changeState(byte state) {
+  gState = state;
+  gCounter = 0;
+  gBtn2State = BTN2_STATE_BRIGHTNESS;
+}
+
+void secondaryButtonPressed() {
+  if (gState == STATE_COLOR && gBtn2State == BTN2_STATE_BRIGHTNESS) {
+    gBtn2State = BTN2_STATE_COLOR;
+  } else if (gState == STATE_DISCO && gBtn2State == BTN2_STATE_BRIGHTNESS) {
+    gBtn2State = BTN2_STATE_COLOR;
+  } else if (gState == STATE_DISCO && gBtn2State == BTN2_STATE_COLOR) {
+    gBtn2State = BTN2_STATE_SPEED;
+  } else if (gState == STATE_DISCO && gBtn2State == BTN2_STATE_SPEED) {
+    gBtn2State = BTN2_STATE_PROGRAM;
+  } else {
+    gBtn2State = BTN2_STATE_BRIGHTNESS;
+  }
+}
+
+void dialTurned(byte amount) {
+  switch(gBtn2State) {
+    case BTN2_STATE_BRIGHTNESS:
+      gBrightness += amount;
+      if (gBrightness > MAX_BRIGHTNESS) {
+        gBrightness = MAX_BRIGHTNESS;
+      } else if (gBrightness < MIN_BRIGHTNESS) {
+        gBrightness = MIN_BRIGHTNESS;
+      }
+      strip.setBrightness(gBrightness);
       break;
     case BTN2_STATE_COLOR:
-      hueOffset++;
-      if (hueOffset > MAX_HUE) {
-        hueOffset = 0;
+      if (amount > 0) {
+        gHueOffset += 0.1;
+      } else {
+        gHueOffset -= 0.1;
+      }
+      if (gHueOffset > MAX_HUE) {
+        gHueOffset = 0;
+      } else if (gHueOffset < 0) {
+        gHueOffset = MAX_HUE;
       }
       break;
     case BTN2_STATE_SPEED:
-      delayMultiplier += 0.1;
-      if (delayMultiplier > 4.0) {
-        delayMultiplier = 4.0;
+      gDelayMultiplier += 0.1;
+      if (gDelayMultiplier > 4.0) {
+        gDelayMultiplier = 4.0;
+      } else if (gDelayMultiplier < 1.0) {
+        gDelayMultiplier = 1.0;
       }
       break;
     case BTN2_STATE_PROGRAM:
-      discoProgram++;
-      if (discoProgram >= PROGRAM_COUNT) {
-        discoProgram = 0;
+      gDiscoProgram += amount;
+      if (gDiscoProgram >= PROGRAM_COUNT) {
+        gDiscoProgram = 0;
+      } else if (gDiscoProgram < 0) {
+        gDiscoProgram = PROGRAM_COUNT - 1;
       }
+      break;
   }
 }
 
 void motionDetected() {
   Serial.print("Motion Detected");
-  if (state == STATE_MOTION_OFF || state == STATE_MOTION_TURNING_OFF) {
-    state = STATE_MOTION_TURNING_ON;
+  if (gState == STATE_MOTION_OFF || gState == STATE_MOTION_TURNING_OFF) {
+    gState = STATE_MOTION_TURNING_ON;
   }
-  motionDetectedAt = millis();
+  gMotionDetectedAt = millis();
 }
 
 void fadeUp(unsigned int finalState) {
   for(uint16_t i=0; i<strip.numPixels(); i++) {
-    strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[counter] ) );
+    strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[gCounter] ) );
   }
   strip.show();
   delay(MIN_LED_DELAY);
-  if (counter < 255) {
-    counter++;
+  if (gCounter < 255) {
+    gCounter++;
   } else {
-    state = finalState;
-    counter = 0;
+    gState = finalState;
+    gCounter = 0;
   }
 }
 
 void fadeDown(unsigned int finalState) {
   for(uint16_t i=0; i<strip.numPixels(); i++) {
-    strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[255-counter] ) );
+    strip.setPixelColor(i, strip.Color(0,0,0, neopix_gamma[255-gCounter] ) );
   }
   strip.show();
   delay(MIN_LED_DELAY);
-  if (counter < 255) {
-    counter++;
+  if (gCounter < 255) {
+    gCounter++;
   } else {
-    state = finalState;
-    counter = 0;
+    gState = finalState;
+    gCounter = 0;
   }
 }
 
 // Input a value 0 to 255 to get a color value.
-// The colours are a transition r - g - b - back to r.
-uint32_t colorWheel(byte wheelPos) {
+// The colors are a transition r - g - b - back to r.
+uint32_t colorWheel(byte wheelPos, boolean includeWhite) {
   wheelPos = wheelPos % 255;
   wheelPos = 255 - wheelPos;
-  if(wheelPos < 85) {
+  if (wheelPos == 0 && includeWhite) {
+    return strip.Color(0, 0, 0, 255);
+  }
+  if (wheelPos < 85) {
     return strip.Color(255 - wheelPos * 3, 0, wheelPos * 3,0);
   }
-  if(wheelPos < 170) {
+  if (wheelPos < 170) {
     wheelPos -= 85;
     return strip.Color(0, wheelPos * 3, 255 - wheelPos * 3,0);
   }
   wheelPos -= 170;
   return strip.Color(wheelPos * 3, 255 - wheelPos * 3, 0,0);
-}
-
-uint32_t adjustBrightnessOfColor(uint32_t color) {
-  // how to I adjust the brightness of the color ?
-  return color;
 }
 
 uint8_t red(uint32_t c) {
